@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Shortened relying party policy: DefaultUserJourney must name a user journey
+     defined in the base or extensions policy. -->
+<TrustFrameworkPolicy xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+  xmlns="http://schemas.microsoft.com/online/cpim/schemas/2013/06" PolicySchemaVersion="0.3.0.0"
+  TenantId="${tenant}" PolicyId="${policy_id}" PublicPolicyUri="http://${tenant}/${policy_id}">
+  <BasePolicy>
+    <TenantId>${tenant}</TenantId>
+    <PolicyId>${base_policy_id}</PolicyId>
+  </BasePolicy>
+  <RelyingParty>
+    <DefaultUserJourney ReferenceId="SignUpOrSignIn" />
+    <TechnicalProfile Id="PolicyProfile">
+      <DisplayName>PolicyProfile</DisplayName>
+      <Protocol Name="OpenIdConnect" />
+      <OutputClaims>
+        <OutputClaim ClaimTypeReferenceId="objectId" PartnerClaimType="sub" />
+      </OutputClaims>
+      <SubjectNamingInfo ClaimType="sub" />
+    </TechnicalProfile>
+  </RelyingParty>
+</TrustFrameworkPolicy>

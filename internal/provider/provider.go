@@ -2,92 +2,99 @@ package provider
 
 import (
 	"context"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/pjfebbraro/terraform-provider-azureadb2cief/internal/client"
-	"github.com/pjfebbraro/terraform-provider-azureadb2cief/internal/datasources"
-	"github.com/pjfebbraro/terraform-provider-azureadb2cief/internal/resources"
+	"net/http"
+
+	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/provider"
+	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+
+	"github.com/terraprovider/go-msadmin/retry"
+	"github.com/terraprovider/tf-msadmin/authschema"
 )
 
-func init() {
-	// Set descriptions to support markdown syntax, this will be used in document generation
-	// and the language server.
-	schema.DescriptionKind = schema.StringMarkdown
+var _ provider.Provider = &azureADB2CProvider{}
 
-	// Customize the content of descriptions when output. For example you can add defaults on
-	// to the exported descriptions if present.
-	// schema.SchemaDescriptionBuilder = func(s *schema.Schema) string {
-	// 	desc := s.Description
-	// 	if s.Default != nil {
-	// 		desc += fmt.Sprintf(" Defaults to `%v`.", s.Default)
-	// 	}
-	// 	return strings.TrimSpace(desc)
-	// }
+// azureADB2CProvider implements the Azure AD B2C custom policy provider.
+type azureADB2CProvider struct{ version string }
+
+// New returns the provider constructor for the given version.
+func New(version string) func() provider.Provider {
+	return func() provider.Provider { return &azureADB2CProvider{version: version} }
 }
 
-func New(version string) func() *schema.Provider {
-	return func() *schema.Provider {
-		p := &schema.Provider{
-			Schema: map[string]*schema.Schema{
-				"client_id": {
-					Type:        schema.TypeString,
-					Optional:    true,
-					DefaultFunc: schema.EnvDefaultFunc("ARM_CLIENT_ID", ""),
-					Description: "The Client ID which should be used for service principal authentication",
-				},
-				"tenant_id": {
-					Type:        schema.TypeString,
-					Required:    true,
-					DefaultFunc: schema.EnvDefaultFunc("ARM_TENANT_ID", ""),
-					Description: "The Tenant ID which should be used. Works with all authentication methods except Managed Identity",
-				},
-				"client_secret": {
-					Type:        schema.TypeString,
-					Optional:    true,
-					DefaultFunc: schema.EnvDefaultFunc("ARM_CLIENT_SECRET", ""),
-					Description: "The application password to use when authenticating as a Service Principal using a Client Secret",
-				},
-				"use_cli": {
-					Type:        schema.TypeBool,
-					Optional:    true,
-					DefaultFunc: schema.EnvDefaultFunc("ARM_USE_CLI", true),
-					Description: "Allow Azure CLI to be used for Authentication",
-				},
-			},
-			ResourcesMap: map[string]*schema.Resource{
-				"azureadb2cief_trust_framework_policy":  resources.TrustFrameworkPolicyResource(),
-				"azureadb2cief_trust_framework_key_set": resources.TrustFrameworkKeySetResource(),
-			},
-			DataSourcesMap: map[string]*schema.Resource{
-				"azureadb2cief_client_config": datasources.ClientConfigDataSource(),
-			},
-		}
+func (p *azureADB2CProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
+	resp.TypeName = "azureadb2c"
+	resp.Version = p.version
+}
 
-		p.ConfigureContextFunc = configure(version, p)
+// providerModel is the shared azuread/azurerm-aligned auth block.
+type providerModel struct {
+	authschema.Model
+}
 
-		return p
+func (p *azureADB2CProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
+	resp.Schema = schema.Schema{
+		Description: "Manage Azure AD B2C custom policies (Identity Experience Framework) and policy keys through the Microsoft Graph trustFramework API. " +
+			"Authentication mirrors the AzureAD/AzureRM providers (ARM_*/AZURE_* env vars supported). " +
+			"App-only needs the Microsoft Graph application permissions Policy.ReadWrite.TrustFramework and TrustFrameworkKeySet.ReadWrite.All.",
+		Attributes: authschema.Attributes(),
 	}
 }
 
-func configure(version string, p *schema.Provider) func(context.Context, *schema.ResourceData) (interface{}, diag.Diagnostics) {
-	return func(ctx context.Context, d *schema.ResourceData) (interface{}, diag.Diagnostics) {
-
-		authConfig := client.MsGraphClientConfig{
-			TenantID:            d.Get("tenant_id").(string),
-			ClientID:            d.Get("client_id").(string),
-			ClientSecret:        d.Get("client_secret").(string),
-			EnableAzureCliToken: d.Get("use_cli").(bool),
-		}
-
-		return buildClient(authConfig)
+func (p *azureADB2CProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
+	var m providerModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &m)...)
+	if resp.Diagnostics.HasError() {
+		return
 	}
-}
 
-func buildClient(config client.MsGraphClientConfig) (*client.Client, diag.Diagnostics) {
-	apiClient, err := client.New(config)
+	// Explicit config overlaid onto the ARM_*/AZURE_* environment.
+	tp, err := m.Config().Build()
 	if err != nil {
-		return nil, diag.FromErr(err)
+		resp.Diagnostics.AddError("Authentication configuration error", err.Error())
+		return
 	}
 
-	return apiClient, nil
+	// Acquire a Graph token now so bad credentials fail before any resource call.
+	if _, err := tp.Token(ctx, graphResource); err != nil {
+		resp.Diagnostics.AddError("Authentication failed", err.Error())
+		return
+	}
+
+	c := &graphClient{
+		Tokens:  tp,
+		HTTP:    &http.Client{Transport: retry.NewTransport(newSecretRedactingDebugTransport(nil), retry.Config{})},
+		BaseURL: graphBaseURL,
+	}
+	resp.ResourceData = c
+	resp.DataSourceData = c
+}
+
+func (p *azureADB2CProvider) Resources(_ context.Context) []func() resource.Resource {
+	return []func() resource.Resource{
+		NewTrustFrameworkPolicyResource,
+		NewTrustFrameworkKeySetResource,
+	}
+}
+
+func (p *azureADB2CProvider) DataSources(_ context.Context) []func() datasource.DataSource {
+	return []func() datasource.DataSource{
+		NewTrustFrameworkPolicyDataSource,
+		NewTrustFrameworkKeySetDataSource,
+	}
+}
+
+// clientFromProviderData returns the configured client, or an error message
+// when the provider data has an unexpected type. nil data (before the provider
+// is configured) returns nil and no error.
+func clientFromProviderData(data any) (*graphClient, string) {
+	if data == nil {
+		return nil, ""
+	}
+	c, ok := data.(*graphClient)
+	if !ok {
+		return nil, "Expected *provider.graphClient as provider data. Please report this to the provider developers."
+	}
+	return c, ""
 }

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Shortened base policy: start from the Azure AD B2C custom policy starter pack
+     and replace the tenant name and key container ids with template variables. -->
+<TrustFrameworkPolicy xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+  xmlns="http://schemas.microsoft.com/online/cpim/schemas/2013/06" PolicySchemaVersion="0.3.0.0"
+  TenantId="${tenant}" PolicyId="${policy_id}" PublicPolicyUri="http://${tenant}/${policy_id}">
+  <BuildingBlocks>
+    <ClaimsSchema>
+      <ClaimType Id="objectId">
+        <DisplayName>User's Object ID</DisplayName>
+        <DataType>string</DataType>
+      </ClaimType>
+    </ClaimsSchema>
+  </BuildingBlocks>
+  <ClaimsProviders>
+    <ClaimsProvider>
+      <DisplayName>Token Issuer</DisplayName>
+      <TechnicalProfiles>
+        <TechnicalProfile Id="JwtIssuer">
+          <DisplayName>JWT Issuer</DisplayName>
+          <Protocol Name="None" />
+          <OutputTokenFormat>JWT</OutputTokenFormat>
+          <Metadata>
+            <Item Key="client_id">{service:te}</Item>
+            <Item Key="issuer_refresh_token_user_identity_claim_type">objectId</Item>
+            <Item Key="SendTokenResponseBodyWithJsonNumbers">true</Item>
+          </Metadata>
+          <CryptographicKeys>
+            <Key Id="issuer_secret" StorageReferenceId="${signing_key_container}" />
+            <Key Id="issuer_refresh_token_key" StorageReferenceId="${encryption_key_container}" />
+          </CryptographicKeys>
+        </TechnicalProfile>
+      </TechnicalProfiles>
+    </ClaimsProvider>
+  </ClaimsProviders>
+</TrustFrameworkPolicy>
