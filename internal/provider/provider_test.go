@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/terraprovider/go-msadmin/httpx"
@@ -143,4 +144,62 @@ func schemaAttribute(s *tfprotov6.Schema, name string) *tfprotov6.SchemaAttribut
 
 func schemaHasAttribute(s *tfprotov6.Schema, name string) bool {
 	return schemaAttribute(s, name) != nil
+}
+
+func TestAuthConfig(t *testing.T) {
+	const zero = "00000000-0000-0000-0000-000000000000"
+	explicit := func(mod func(*authschema.Model)) authschema.Model {
+		m := authschema.Model{TenantID: types.StringValue(zero), ClientID: types.StringValue(zero)}
+		mod(&m)
+		return m
+	}
+	secret := func(m *authschema.Model) { m.ClientSecret = types.StringValue("explicit") }
+	cases := []struct {
+		name  string
+		env   map[string]string
+		model authschema.Model
+		want  string
+	}{
+		{"explicit secret over env oidc, cli and msi",
+			map[string]string{"ARM_USE_OIDC": "true", "ARM_OIDC_TOKEN": "ambient-token", "ARM_USE_CLI": "true", "ARM_USE_MSI": "true"},
+			explicit(secret), "secret"},
+		{"explicit secret over GitHub Actions oidc env",
+			map[string]string{"ACTIONS_ID_TOKEN_REQUEST_URL": "https://example.invalid/token", "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "ambient-token"},
+			explicit(secret), "secret"},
+		{"explicit certificate over env oidc and env secret",
+			map[string]string{"ARM_USE_OIDC": "true", "ARM_OIDC_TOKEN": "ambient-token", "ARM_CLIENT_SECRET": "ambient-secret"},
+			explicit(func(m *authschema.Model) { m.ClientCertificatePath = types.StringValue("cert.pfx") }), "certificate"},
+		{"explicit use_cli kept", nil,
+			explicit(func(m *authschema.Model) { secret(m); m.UseCLI = types.BoolValue(true) }), "cli"},
+		{"explicit use_msi kept", nil,
+			explicit(func(m *authschema.Model) { secret(m); m.UseMSI = types.BoolValue(true) }), "msi"},
+		{"explicit oidc kept", nil,
+			explicit(func(m *authschema.Model) {
+				secret(m)
+				m.UseOIDC, m.OIDCToken = types.BoolValue(true), types.StringValue("explicit-token")
+			}), "oidc"},
+		{"env secret with env oidc is unchanged",
+			map[string]string{"ARM_USE_OIDC": "true", "ARM_OIDC_TOKEN": "ambient-token", "ARM_CLIENT_SECRET": "ambient-secret"},
+			explicit(func(*authschema.Model) {}), "oidc"},
+		{"nothing explicit keeps env oidc",
+			map[string]string{"ARM_USE_OIDC": "true", "ARM_OIDC_TOKEN": "ambient-token"},
+			authschema.Model{}, "oidc"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, k := range []string{"ARM_USE_OIDC", "ARM_OIDC_TOKEN", "ARM_USE_CLI", "ARM_USE_MSI", "ARM_CLIENT_SECRET", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN"} {
+				t.Setenv(k, "")
+			}
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			cfg := authConfig(tc.model)
+			if got := cfg.Method(); got != tc.want {
+				t.Errorf("method = %q; want %q", got, tc.want)
+			}
+			if !tc.model.TenantID.IsNull() && (cfg.TenantID != zero || cfg.ClientID != zero) {
+				t.Errorf("tenant %q / client %q; want both kept", cfg.TenantID, cfg.ClientID)
+			}
+		})
+	}
 }

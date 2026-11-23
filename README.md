@@ -24,7 +24,7 @@ A `403` from Graph is a missing permission, not a token problem.
 
 ## Provider configuration
 
-Authentication is the same block as the `hashicorp/azuread` and `azurerm` providers: client secret, client certificate, OIDC / workload identity (GitHub Actions, Azure DevOps), Azure CLI and managed identity, with the usual `ARM_*` / `AZURE_*` environment variables.
+Authentication is the same block as the `hashicorp/azuread` and `azurerm` providers: client secret, client certificate, OIDC / workload identity (GitHub Actions, Azure DevOps), Azure CLI and managed identity, with the usual `ARM_*` / `AZURE_*` environment variables. A `client_secret` or client certificate written in the provider block is used instead of a sign-in method that is only switched on by an environment variable (such as `ARM_USE_OIDC`), unless the block itself sets `use_cli`, `use_msi` or an OIDC option. This lets the provider share a workspace with another provider that signs in to a different tenant.
 
 ```hcl
 terraform {

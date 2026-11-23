@@ -9,6 +9,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 
+	"github.com/terraprovider/go-msadmin/authx"
 	"github.com/terraprovider/go-msadmin/retry"
 	"github.com/terraprovider/tf-msadmin/authschema"
 )
@@ -37,6 +38,7 @@ func (p *azureADB2CProvider) Schema(_ context.Context, _ provider.SchemaRequest,
 	resp.Schema = schema.Schema{
 		Description: "Manage Azure AD B2C custom policies (Identity Experience Framework) and policy keys through the Microsoft Graph trustFramework API. " +
 			"Authentication mirrors the AzureAD/AzureRM providers (ARM_*/AZURE_* env vars supported). " +
+			"A client_secret or client certificate set in this block is used instead of a sign-in method enabled only through environment variables, unless the block also sets use_cli, use_msi or an OIDC option. " +
 			"App-only needs the Microsoft Graph application permissions Policy.ReadWrite.TrustFramework and TrustFrameworkKeySet.ReadWrite.All.",
 		Attributes: authschema.Attributes(),
 	}
@@ -50,7 +52,7 @@ func (p *azureADB2CProvider) Configure(ctx context.Context, req provider.Configu
 	}
 
 	// Explicit config overlaid onto the ARM_*/AZURE_* environment.
-	tp, err := m.Config().Build()
+	tp, err := authConfig(m.Model).Build()
 	if err != nil {
 		resp.Diagnostics.AddError("Authentication configuration error", err.Error())
 		return
@@ -97,4 +99,34 @@ func clientFromProviderData(data any) (*graphClient, string) {
 		return nil, "Expected *provider.graphClient as provider data. Please report this to the provider developers."
 	}
 	return c, ""
+}
+
+// authConfig resolves the authentication settings. A client secret or client
+// certificate set in the provider block is used instead of a sign-in method
+// enabled only through ARM_*/AZURE_* environment variables, unless the block
+// itself sets use_cli, use_msi or an OIDC option. Without an explicit
+// credential the merged settings are returned unchanged.
+func authConfig(m authschema.Model) authx.Config {
+	cfg := m.Config()
+	explicitSecret := m.ClientSecret.ValueString() != ""
+	explicitCertificate := m.ClientCertificate.ValueString() != "" || m.ClientCertificatePath.ValueString() != ""
+	if !explicitSecret && !explicitCertificate {
+		return cfg
+	}
+	if !explicitSecret {
+		cfg.ClientSecret = ""
+	}
+	if !m.UseCLI.ValueBool() {
+		cfg.UseCLI = false
+	}
+	if !m.UseMSI.ValueBool() {
+		cfg.UseMSI = false
+	}
+	explicitOIDC := m.UseOIDC.ValueBool() || m.OIDCToken.ValueString() != "" || m.OIDCTokenFilePath.ValueString() != "" ||
+		m.OIDCRequestToken.ValueString() != "" || m.OIDCRequestURL.ValueString() != "" || m.ADOServiceConnectionID.ValueString() != ""
+	if !explicitOIDC {
+		cfg.UseOIDC = false
+		cfg.OIDCToken, cfg.OIDCTokenFilePath, cfg.OIDCRequestToken, cfg.OIDCRequestURL, cfg.ADOServiceConnectionID = "", "", "", "", ""
+	}
+	return cfg
 }
