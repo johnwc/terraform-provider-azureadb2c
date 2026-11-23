@@ -146,7 +146,7 @@ func TestPolicyPlan(t *testing.T) {
 
 func TestPolicyStateFromServer(t *testing.T) {
 	configured := testBasePolicy
-	reformatted := strings.Replace(strings.Replace(configured, "\n  ", "", -1),
+	reformatted := strings.Replace(strings.ReplaceAll(configured, "\n  ", ""),
 		`PolicySchemaVersion="0.3.0.0" TenantId="contoso.onmicrosoft.com" PolicyId="B2C_1A_base"`,
 		`PolicyId="B2C_1A_base" PolicySchemaVersion="0.3.0.0" TenantId="contoso.onmicrosoft.com"`, 1)
 	changed := strings.Replace(configured, "<BuildingBlocks />", "<BuildingBlocks><ClaimsSchema /></BuildingBlocks>", 1)

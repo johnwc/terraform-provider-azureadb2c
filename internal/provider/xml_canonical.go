@@ -60,7 +60,7 @@ func canonicalXML(doc string) (string, error) {
 			return nil
 		}
 		f := stack[len(stack)-1]
-		if isXMLWhitespace(t) && !f.preserve && !(leafEnd && !f.hasChild) {
+		if isXMLWhitespace(t) && !f.preserve && (!leafEnd || f.hasChild) {
 			return nil
 		}
 		return xml.EscapeText(&out, []byte(t))

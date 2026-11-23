@@ -48,12 +48,12 @@ func (t *secretRedactingDebugTransport) RoundTrip(req *http.Request) (*http.Resp
 	}
 
 	out := t.out()
-	fmt.Fprintf(out, "[http] >>> %s %s (body redacted)\n", req.Method, req.URL.String())
+	_, _ = fmt.Fprintf(out, "[http] >>> %s %s (body redacted)\n", req.Method, req.URL.String())
 	resp, err := t.base().RoundTrip(req)
 	if err != nil {
-		fmt.Fprintf(out, "[http] <<< transport error: %v\n", err)
+		_, _ = fmt.Fprintf(out, "[http] <<< transport error: %v\n", err)
 		return resp, err
 	}
-	fmt.Fprintf(out, "[http] <<< %s\n", resp.Status)
+	_, _ = fmt.Fprintf(out, "[http] <<< %s\n", resp.Status)
 	return resp, nil
 }
